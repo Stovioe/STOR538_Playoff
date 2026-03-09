@@ -30,10 +30,10 @@ import requests
 warnings.filterwarnings("ignore")
 
 # CONFIGURATION
-SEASONS = ["2023-24", "2024-25", "2025-26"]
+SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25", "2025-26"]
 DATA_DIR = "data"
-ROLLING_LONG = 20    # baseline window
-ROLLING_SHORT = 5    # recent form window
+ROLLING_LONG = 30    # baseline window
+ROLLING_SHORT = 10   # recent form window
 ELO_K = 20
 ELO_HOME_BONUS = 100
 ELO_INIT = 1500
@@ -189,7 +189,7 @@ def pull_player_bpm_bbref(seasons):
     and save as data/bbref_advanced_{year}.csv before running.
     Returns DataFrame with columns: Player, BPM, SEASON.
     """
-    season_year_map = {"2023-24": 2024, "2024-25": 2025, "2025-26": 2026}
+    season_year_map = {"2021-22": 2022, "2022-23": 2023, "2023-24": 2024, "2024-25": 2025, "2025-26": 2026}
     records = []
 
     for season in seasons:
@@ -544,7 +544,7 @@ def compute_rolling_features(games):
     # min_periods=5: require at least 5 prior games before computing a rolling average.
     # This prevents noise from 1-2 game samples at season start.
     for stat in roll_stats + ["PTS_ALLOWED", "WIN"]:
-        for window, suffix in [(ROLLING_LONG, "20"), (ROLLING_SHORT, "5")]:
+        for window, suffix in [(ROLLING_LONG, "30"), (ROLLING_SHORT, "10")]:
             col_name = f"ROLL_{stat}_{suffix}"
             team_df[col_name] = (
                 team_df.groupby("TEAM_ID")[stat]
@@ -554,7 +554,7 @@ def compute_rolling_features(games):
     # Defensive Four Factors rolling averages (20-game only)
     # Lower DEF_EFG = better defense; model learns the direction from data.
     for stat in ["DEF_EFG", "DEF_TOV_RATE", "DEF_OREB_RATE", "DEF_FT_RATE"]:
-        team_df[f"ROLL_{stat}_20"] = (
+        team_df[f"ROLL_{stat}_30"] = (
             team_df.groupby("TEAM_ID")[stat]
             .transform(lambda x: x.shift(1).rolling(ROLLING_LONG, min_periods=5).mean())
         )
@@ -637,27 +637,27 @@ def build_model_features(games):
     Interactions for OREB matchup.
     """
     # --- OFFENSIVE DIFFERENTIAL FEATURES (primarily for Spread) ---
-    diff_stats_20 = ["EFG", "TOV_RATE", "OREB_RATE", "FT_RATE", "NET_RTG", "ORTG", "DRTG", "PTS"]
-    for stat in diff_stats_20:
-        games[f"DIFF_{stat}_20"] = (
-            games[f"HOME_ROLL_{stat}_20"] - games[f"AWAY_ROLL_{stat}_20"]
+    diff_stats_30 = ["EFG", "TOV_RATE", "OREB_RATE", "FT_RATE", "NET_RTG", "ORTG", "DRTG", "PTS"]
+    for stat in diff_stats_30:
+        games[f"DIFF_{stat}_30"] = (
+            games[f"HOME_ROLL_{stat}_30"] - games[f"AWAY_ROLL_{stat}_30"]
         )
 
-    diff_stats_5 = ["NET_RTG", "PTS"]
-    for stat in diff_stats_5:
-        games[f"DIFF_{stat}_5"] = (
-            games[f"HOME_ROLL_{stat}_5"] - games[f"AWAY_ROLL_{stat}_5"]
+    diff_stats_10 = ["NET_RTG", "PTS"]
+    for stat in diff_stats_10:
+        games[f"DIFF_{stat}_10"] = (
+            games[f"HOME_ROLL_{stat}_10"] - games[f"AWAY_ROLL_{stat}_10"]
         )
 
     games["DIFF_WIN_PCT"] = games["HOME_SEASON_WIN_PCT"] - games["AWAY_SEASON_WIN_PCT"]
     games["REST_DIFF"] = games["HOME_REST_DAYS"] - games["AWAY_REST_DAYS"]
 
     # --- DEFENSIVE FOUR FACTORS DIFFERENTIALS ---
-    # A negative DIFF_DEF_EFG_20 means home team allows more efficient shots = weaker defense.
+    # A negative DIFF_DEF_EFG_30 means home team allows more efficient shots = weaker defense.
     # The model learns the sign direction from data.
     for stat in ["DEF_EFG", "DEF_TOV_RATE", "DEF_OREB_RATE", "DEF_FT_RATE"]:
-        games[f"DIFF_{stat}_20"] = (
-            games[f"HOME_ROLL_{stat}_20"] - games[f"AWAY_ROLL_{stat}_20"]
+        games[f"DIFF_{stat}_30"] = (
+            games[f"HOME_ROLL_{stat}_30"] - games[f"AWAY_ROLL_{stat}_30"]
         )
 
     # Home/road split win% differential (Section 3J)
@@ -674,37 +674,37 @@ def build_model_features(games):
         games["AVAILABILITY_DIFF"] = np.nan
 
     # --- SUM FEATURES (primarily for Total) ---
-    sum_stats_20 = ["ORTG", "DRTG", "EFG", "FT_RATE", "PACE", "PTS"]
-    for stat in sum_stats_20:
-        games[f"SUM_{stat}_20"] = (
-            games[f"HOME_ROLL_{stat}_20"] + games[f"AWAY_ROLL_{stat}_20"]
+    sum_stats_30 = ["ORTG", "DRTG", "EFG", "FT_RATE", "PACE", "PTS"]
+    for stat in sum_stats_30:
+        games[f"SUM_{stat}_30"] = (
+            games[f"HOME_ROLL_{stat}_30"] + games[f"AWAY_ROLL_{stat}_30"]
         )
 
-    games["SUM_PTS_5"] = games["HOME_ROLL_PTS_5"] + games["AWAY_ROLL_PTS_5"]
-    games["EXPECTED_PACE"] = (games["HOME_ROLL_PACE_20"] + games["AWAY_ROLL_PACE_20"]) / 2
-    games["PACE_DIFF"] = games["HOME_ROLL_PACE_20"] - games["AWAY_ROLL_PACE_20"]
+    games["SUM_PTS_10"] = games["HOME_ROLL_PTS_10"] + games["AWAY_ROLL_PTS_10"]
+    games["EXPECTED_PACE"] = (games["HOME_ROLL_PACE_30"] + games["AWAY_ROLL_PACE_30"]) / 2
+    games["PACE_DIFF"] = games["HOME_ROLL_PACE_30"] - games["AWAY_ROLL_PACE_30"]
 
     # Interaction: pace × combined eFG (for Total)
-    games["PACE_X_EFG"] = games["EXPECTED_PACE"] * games["SUM_EFG_20"]
+    games["PACE_X_EFG"] = games["EXPECTED_PACE"] * games["SUM_EFG_30"]
 
     games["SUM_B2B"] = games["HOME_IS_B2B"] + games["AWAY_IS_B2B"]
 
     # --- OREB-SPECIFIC FEATURES ---
-    games["SUM_OREB_RATE_20"] = (
-        games["HOME_ROLL_OREB_RATE_20"] + games["AWAY_ROLL_OREB_RATE_20"]
+    games["SUM_OREB_RATE_30"] = (
+        games["HOME_ROLL_OREB_RATE_30"] + games["AWAY_ROLL_OREB_RATE_30"]
     )
-    games["SUM_OREB_5"] = games["HOME_ROLL_OREB_5"] + games["AWAY_ROLL_OREB_5"]
-    games["SUM_EXPECTED_MISSES_20"] = (
-        games["HOME_ROLL_EXPECTED_MISSES_20"] + games["AWAY_ROLL_EXPECTED_MISSES_20"]
+    games["SUM_OREB_10"] = games["HOME_ROLL_OREB_10"] + games["AWAY_ROLL_OREB_10"]
+    games["SUM_EXPECTED_MISSES_30"] = (
+        games["HOME_ROLL_EXPECTED_MISSES_30"] + games["AWAY_ROLL_EXPECTED_MISSES_30"]
     )
-    games["SUM_FGA_20"] = games["HOME_ROLL_FGA_20"] + games["AWAY_ROLL_FGA_20"]
+    games["SUM_FGA_30"] = games["HOME_ROLL_FGA_30"] + games["AWAY_ROLL_FGA_30"]
 
     # OREB% vs opponent DREB% matchup interaction
     games["OREB_MATCHUP_HOME"] = (
-        games["HOME_ROLL_OREB_RATE_20"] * (1 - games["AWAY_ROLL_DREB_RATE_20"])
+        games["HOME_ROLL_OREB_RATE_30"] * (1 - games["AWAY_ROLL_DREB_RATE_30"])
     )
     games["OREB_MATCHUP_AWAY"] = (
-        games["AWAY_ROLL_OREB_RATE_20"] * (1 - games["HOME_ROLL_DREB_RATE_20"])
+        games["AWAY_ROLL_OREB_RATE_30"] * (1 - games["HOME_ROLL_DREB_RATE_30"])
     )
     games["OREB_MATCHUP_TOTAL"] = games["OREB_MATCHUP_HOME"] + games["OREB_MATCHUP_AWAY"]
     games["OREB_MATCHUP_DIFF"] = games["OREB_MATCHUP_HOME"] - games["OREB_MATCHUP_AWAY"]
@@ -716,19 +716,19 @@ def build_model_features(games):
 SPREAD_FEATURES = [
     "ELO_DIFF",
     # Offensive Four Factors differentials
-    "DIFF_EFG_20",
-    "DIFF_TOV_RATE_20",
-    "DIFF_OREB_RATE_20",
-    "DIFF_FT_RATE_20",
+    "DIFF_EFG_30",
+    "DIFF_TOV_RATE_30",
+    "DIFF_OREB_RATE_30",
+    "DIFF_FT_RATE_30",
     # Defensive Four Factors differentials (what opponent does against each team)
-    "DIFF_DEF_EFG_20",
-    "DIFF_DEF_TOV_RATE_20",
-    "DIFF_DEF_OREB_RATE_20",
-    "DIFF_DEF_FT_RATE_20",
+    "DIFF_DEF_EFG_30",
+    "DIFF_DEF_TOV_RATE_30",
+    "DIFF_DEF_OREB_RATE_30",
+    "DIFF_DEF_FT_RATE_30",
     # Efficiency and recent form
-    "DIFF_NET_RTG_20",
-    "DIFF_NET_RTG_5",
-    "DIFF_PTS_5",
+    "DIFF_NET_RTG_30",
+    "DIFF_NET_RTG_10",
+    "DIFF_PTS_10",
     # Record differentials
     "DIFF_WIN_PCT",
     "DIFF_HOME_ROAD_WIN_PCT",  # home record vs road record (venue-specific strength)
@@ -743,39 +743,74 @@ SPREAD_FEATURES = [
 TOTAL_FEATURES = [
     "EXPECTED_PACE",
     "PACE_DIFF",
-    "SUM_ORTG_20",
-    "SUM_DRTG_20",
-    "SUM_EFG_20",
-    "SUM_FT_RATE_20",
-    "SUM_PTS_20",
-    "SUM_PTS_5",
+    "SUM_ORTG_30",
+    "SUM_DRTG_30",
+    "SUM_EFG_30",
+    "SUM_FT_RATE_30",
+    "SUM_PTS_30",
+    "SUM_PTS_10",
     "PACE_X_EFG",
     "SUM_B2B",
     "ELO_DIFF",
 ]
 
 OREB_FEATURES = [
-    "SUM_OREB_RATE_20",
+    "SUM_OREB_RATE_30",
     "OREB_MATCHUP_TOTAL",
     "OREB_MATCHUP_DIFF",
-    "SUM_EXPECTED_MISSES_20",
+    "SUM_EXPECTED_MISSES_30",
     "EXPECTED_PACE",
-    "SUM_OREB_5",
-    "SUM_FGA_20",
-    "HOME_ROLL_OREB_RATE_20",
-    "AWAY_ROLL_OREB_RATE_20",
-    "HOME_ROLL_DREB_RATE_20",
-    "AWAY_ROLL_DREB_RATE_20",
+    "SUM_OREB_10",
+    "SUM_FGA_30",
+    "HOME_ROLL_OREB_RATE_30",
+    "AWAY_ROLL_OREB_RATE_30",
+    "HOME_ROLL_DREB_RATE_30",
+    "AWAY_ROLL_DREB_RATE_30",
 ]
 
 
 # STEP 7: PREPARE TRAINING AND PREDICTION SETS
+def filter_late_season_games(games, n_late=10, current_season="2025-26"):
+    """
+    Remove each team's last n_late games of each completed season.
+    Late-season games are corrupted by load management (star players resting)
+    and produce misleading training signal. Only applied to completed seasons —
+    the current ongoing season is excluded since its schedule is incomplete.
+    A game is removed if EITHER team is within their last n_late games of that season.
+    """
+    completed = games[games["SEASON"] != current_season].copy()
+
+    home_tg = completed[["GAME_ID", "GAME_DATE", "SEASON", "HOME_TEAM_ID"]].rename(
+        columns={"HOME_TEAM_ID": "TEAM_ID"}
+    )
+    away_tg = completed[["GAME_ID", "GAME_DATE", "SEASON", "AWAY_TEAM_ID"]].rename(
+        columns={"AWAY_TEAM_ID": "TEAM_ID"}
+    )
+    tg = pd.concat([home_tg, away_tg]).drop_duplicates(["GAME_ID", "TEAM_ID"])
+    tg = tg.sort_values(["TEAM_ID", "SEASON", "GAME_DATE"]).reset_index(drop=True)
+
+    tg["GAME_NUM"] = tg.groupby(["TEAM_ID", "SEASON"]).cumcount() + 1
+    tg["TOTAL_GAMES"] = tg.groupby(["TEAM_ID", "SEASON"])["GAME_NUM"].transform("max")
+    tg["GAMES_FROM_END"] = tg["TOTAL_GAMES"] - tg["GAME_NUM"]
+
+    late_game_ids = set(tg.loc[tg["GAMES_FROM_END"] < n_late, "GAME_ID"])
+
+    n_before = len(games)
+    games_filtered = games[~games["GAME_ID"].isin(late_game_ids)].copy()
+    print(f"  Late-season filter: removed {n_before - len(games_filtered)} games "
+          f"(last {n_late} per team for completed seasons)")
+    return games_filtered
+
+
 def prepare_train_test(games, cutoff_date="2026-03-14"):
     """
     Split into training data (before cutoff) and drop rows with NaN features.
+    Filters out late-season games from completed seasons to remove load-management noise.
     """
     cutoff = pd.to_datetime(cutoff_date)
     train = games[games["GAME_DATE"] < cutoff].copy()
+
+    train = filter_late_season_games(train)
 
     train_spread = train.dropna(subset=SPREAD_FEATURES + ["SPREAD"])
     train_total = train.dropna(subset=TOTAL_FEATURES + ["TOTAL"])
@@ -898,16 +933,16 @@ def build_model_features_for_pred(df):
     """
     # Offensive differentials
     for stat in ["EFG", "TOV_RATE", "OREB_RATE", "FT_RATE", "NET_RTG", "ORTG", "DRTG", "PTS"]:
-        df[f"DIFF_{stat}_20"] = df[f"HOME_ROLL_{stat}_20"] - df[f"AWAY_ROLL_{stat}_20"]
+        df[f"DIFF_{stat}_30"] = df[f"HOME_ROLL_{stat}_30"] - df[f"AWAY_ROLL_{stat}_30"]
     for stat in ["NET_RTG", "PTS"]:
-        df[f"DIFF_{stat}_5"] = df[f"HOME_ROLL_{stat}_5"] - df[f"AWAY_ROLL_{stat}_5"]
+        df[f"DIFF_{stat}_10"] = df[f"HOME_ROLL_{stat}_10"] - df[f"AWAY_ROLL_{stat}_10"]
 
     df["DIFF_WIN_PCT"] = df["HOME_SEASON_WIN_PCT"] - df["AWAY_SEASON_WIN_PCT"]
     df["REST_DIFF"] = df["HOME_REST_DAYS"] - df["AWAY_REST_DAYS"]
 
     # Defensive Four Factors differentials
     for stat in ["DEF_EFG", "DEF_TOV_RATE", "DEF_OREB_RATE", "DEF_FT_RATE"]:
-        df[f"DIFF_{stat}_20"] = df[f"HOME_ROLL_{stat}_20"] - df[f"AWAY_ROLL_{stat}_20"]
+        df[f"DIFF_{stat}_30"] = df[f"HOME_ROLL_{stat}_30"] - df[f"AWAY_ROLL_{stat}_30"]
 
     # Home/road win% differential
     df["DIFF_HOME_ROAD_WIN_PCT"] = df["HOME_HOME_WIN_PCT"] - df["AWAY_ROAD_WIN_PCT"]
@@ -920,21 +955,21 @@ def build_model_features_for_pred(df):
 
     # Sums for Total model
     for stat in ["ORTG", "DRTG", "EFG", "FT_RATE", "PACE", "PTS"]:
-        df[f"SUM_{stat}_20"] = df[f"HOME_ROLL_{stat}_20"] + df[f"AWAY_ROLL_{stat}_20"]
+        df[f"SUM_{stat}_30"] = df[f"HOME_ROLL_{stat}_30"] + df[f"AWAY_ROLL_{stat}_30"]
 
-    df["SUM_PTS_5"] = df["HOME_ROLL_PTS_5"] + df["AWAY_ROLL_PTS_5"]
-    df["EXPECTED_PACE"] = (df["HOME_ROLL_PACE_20"] + df["AWAY_ROLL_PACE_20"]) / 2
-    df["PACE_DIFF"] = df["HOME_ROLL_PACE_20"] - df["AWAY_ROLL_PACE_20"]
-    df["PACE_X_EFG"] = df["EXPECTED_PACE"] * df["SUM_EFG_20"]
+    df["SUM_PTS_10"] = df["HOME_ROLL_PTS_10"] + df["AWAY_ROLL_PTS_10"]
+    df["EXPECTED_PACE"] = (df["HOME_ROLL_PACE_30"] + df["AWAY_ROLL_PACE_30"]) / 2
+    df["PACE_DIFF"] = df["HOME_ROLL_PACE_30"] - df["AWAY_ROLL_PACE_30"]
+    df["PACE_X_EFG"] = df["EXPECTED_PACE"] * df["SUM_EFG_30"]
     df["SUM_B2B"] = df["HOME_IS_B2B"] + df["AWAY_IS_B2B"]
 
     # OREB-specific
-    df["SUM_OREB_RATE_20"] = df["HOME_ROLL_OREB_RATE_20"] + df["AWAY_ROLL_OREB_RATE_20"]
-    df["SUM_OREB_5"] = df["HOME_ROLL_OREB_5"] + df["AWAY_ROLL_OREB_5"]
-    df["SUM_EXPECTED_MISSES_20"] = df["HOME_ROLL_EXPECTED_MISSES_20"] + df["AWAY_ROLL_EXPECTED_MISSES_20"]
-    df["SUM_FGA_20"] = df["HOME_ROLL_FGA_20"] + df["AWAY_ROLL_FGA_20"]
-    df["OREB_MATCHUP_HOME"] = df["HOME_ROLL_OREB_RATE_20"] * (1 - df["AWAY_ROLL_DREB_RATE_20"])
-    df["OREB_MATCHUP_AWAY"] = df["AWAY_ROLL_OREB_RATE_20"] * (1 - df["HOME_ROLL_DREB_RATE_20"])
+    df["SUM_OREB_RATE_30"] = df["HOME_ROLL_OREB_RATE_30"] + df["AWAY_ROLL_OREB_RATE_30"]
+    df["SUM_OREB_10"] = df["HOME_ROLL_OREB_10"] + df["AWAY_ROLL_OREB_10"]
+    df["SUM_EXPECTED_MISSES_30"] = df["HOME_ROLL_EXPECTED_MISSES_30"] + df["AWAY_ROLL_EXPECTED_MISSES_30"]
+    df["SUM_FGA_30"] = df["HOME_ROLL_FGA_30"] + df["AWAY_ROLL_FGA_30"]
+    df["OREB_MATCHUP_HOME"] = df["HOME_ROLL_OREB_RATE_30"] * (1 - df["AWAY_ROLL_DREB_RATE_30"])
+    df["OREB_MATCHUP_AWAY"] = df["AWAY_ROLL_OREB_RATE_30"] * (1 - df["HOME_ROLL_DREB_RATE_30"])
     df["OREB_MATCHUP_TOTAL"] = df["OREB_MATCHUP_HOME"] + df["OREB_MATCHUP_AWAY"]
     df["OREB_MATCHUP_DIFF"] = df["OREB_MATCHUP_HOME"] - df["OREB_MATCHUP_AWAY"]
 

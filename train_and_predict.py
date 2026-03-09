@@ -38,12 +38,14 @@ from build_dataset import SPREAD_FEATURES, TOTAL_FEATURES, OREB_FEATURES
 def compute_sample_weights(game_dates, decay_per_season=0.5):
     """
     Assign higher weights to more recent games.
-    2025-26 → 1.0, 2024-25 → 0.5, 2023-24 → 0.25 (by default).
+    2025-26 → 1.0, 2024-25 → 0.5, 2023-24 → 0.25, 2022-23 → 0.125, 2021-22 → 0.0625.
     """
     dates = pd.to_datetime(game_dates)
     weights = pd.Series(1.0, index=dates.index)
     weights[dates < pd.Timestamp("2025-10-01")] = decay_per_season          # 2024-25
     weights[dates < pd.Timestamp("2024-10-01")] = decay_per_season ** 2     # 2023-24
+    weights[dates < pd.Timestamp("2023-10-01")] = decay_per_season ** 3     # 2022-23
+    weights[dates < pd.Timestamp("2022-10-01")] = decay_per_season ** 4     # 2021-22
     return weights
 
 
@@ -223,7 +225,7 @@ def train_stacked_ensemble(X_train, y_train, base_models, meta_model_fn, sample_
     oof_mae = mean_absolute_error(y_train, ensemble_oof_preds)
     print(f"    Ensemble OOF MAE: {oof_mae:.3f}")
 
-    return fitted_bases, meta_model
+    return fitted_bases, meta_model, oof_mae
 
 
 def predict_stacked(fitted_bases, meta_model, X):
@@ -297,7 +299,7 @@ def main():
     w_spread = compute_sample_weights(train_spread["GAME_DATE"])
     w_total  = compute_sample_weights(train_total["GAME_DATE"])
     w_oreb   = compute_sample_weights(train_oreb["GAME_DATE"])
-    print(f"  Sample weight distribution — 2023-24: 0.25, 2024-25: 0.50, 2025-26: 1.00")
+    print(f"  Sample weight distribution — 2021-22: 0.0625, 2022-23: 0.125, 2023-24: 0.25, 2024-25: 0.50, 2025-26: 1.00")
 
     print("\nSPREAD MODEL")
 
@@ -308,13 +310,13 @@ def main():
     ridge_spread_maes = walk_forward_validate(X_spread, y_spread, lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight), sample_weight=w_spread)
 
     print("\n  XGBoost:")
-    walk_forward_validate(X_spread, y_spread, train_xgboost, sample_weight=w_spread)
+    xgb_spread_maes = walk_forward_validate(X_spread, y_spread, train_xgboost, sample_weight=w_spread)
 
     print("\n  LightGBM:")
-    walk_forward_validate(X_spread, y_spread, train_lightgbm, sample_weight=w_spread)
+    lgbm_spread_maes = walk_forward_validate(X_spread, y_spread, train_lightgbm, sample_weight=w_spread)
 
     print("\n  Training stacked ensemble (final)...")
-    spread_bases, spread_meta = train_stacked_ensemble(
+    spread_bases, spread_meta, spread_oof_mae = train_stacked_ensemble(
         X_spread, y_spread,
         base_models=[
             ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight)),
@@ -325,8 +327,28 @@ def main():
         sample_weight=w_spread,
     )
 
-    spread_preds = predict_stacked(spread_bases, spread_meta, pred_features[SPREAD_FEATURES])
-    print(f"  Ridge CV MAE: {np.mean(ridge_spread_maes):.3f} | Ensemble OOF MAE shown above")
+    print("  Training final individual models on full data...")
+    final_ridge_spread = train_ridge(X_spread, y_spread, alpha=1.0, sample_weight=w_spread)
+    final_xgb_spread   = train_xgboost(X_spread, y_spread, sample_weight=w_spread)
+    final_lgbm_spread  = train_lightgbm(X_spread, y_spread, sample_weight=w_spread)
+
+    spread_model_maes = {
+        "Ridge":    np.mean(ridge_spread_maes),
+        "XGBoost":  np.mean(xgb_spread_maes),
+        "LightGBM": np.mean(lgbm_spread_maes),
+        "Ensemble": spread_oof_mae,
+    }
+    best_spread = min(spread_model_maes, key=spread_model_maes.get)
+    X_pred_spread = pred_features[SPREAD_FEATURES]
+    if best_spread == "Ridge":
+        spread_preds = predict_ridge(final_ridge_spread, X_pred_spread)
+    elif best_spread == "XGBoost":
+        spread_preds = final_xgb_spread.predict(X_pred_spread)
+    elif best_spread == "LightGBM":
+        spread_preds = final_lgbm_spread.predict(X_pred_spread)
+    else:
+        spread_preds = predict_stacked(spread_bases, spread_meta, X_pred_spread)
+    print(f"  Using {best_spread} for Spread predictions (MAE {spread_model_maes[best_spread]:.3f})")
     print(f"  Spread predictions generated: mean={np.mean(spread_preds):.2f}, std={np.std(spread_preds):.2f}")
 
     print("\nTOTAL MODEL")
@@ -338,10 +360,10 @@ def main():
     ridge_total_maes = walk_forward_validate(X_total, y_total, lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight), sample_weight=w_total)
 
     print("\n  LightGBM:")
-    walk_forward_validate(X_total, y_total, train_lightgbm, sample_weight=w_total)
+    lgbm_total_maes = walk_forward_validate(X_total, y_total, train_lightgbm, sample_weight=w_total)
 
     print("\n  Training stacked ensemble (final)...")
-    total_bases, total_meta = train_stacked_ensemble(
+    total_bases, total_meta, total_oof_mae = train_stacked_ensemble(
         X_total, y_total,
         base_models=[
             ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight)),
@@ -352,8 +374,24 @@ def main():
         sample_weight=w_total,
     )
 
-    total_preds = predict_stacked(total_bases, total_meta, pred_features[TOTAL_FEATURES])
-    print(f"  Ridge CV MAE: {np.mean(ridge_total_maes):.3f} | Ensemble OOF MAE shown above")
+    print("  Training final individual models on full data...")
+    final_ridge_total = train_ridge(X_total, y_total, alpha=1.0, sample_weight=w_total)
+    final_lgbm_total  = train_lightgbm(X_total, y_total, sample_weight=w_total)
+
+    total_model_maes = {
+        "Ridge":    np.mean(ridge_total_maes),
+        "LightGBM": np.mean(lgbm_total_maes),
+        "Ensemble": total_oof_mae,
+    }
+    best_total = min(total_model_maes, key=total_model_maes.get)
+    X_pred_total = pred_features[TOTAL_FEATURES]
+    if best_total == "Ridge":
+        total_preds = predict_ridge(final_ridge_total, X_pred_total)
+    elif best_total == "LightGBM":
+        total_preds = final_lgbm_total.predict(X_pred_total)
+    else:
+        total_preds = predict_stacked(total_bases, total_meta, X_pred_total)
+    print(f"  Using {best_total} for Total predictions (MAE {total_model_maes[best_total]:.3f})")
     print(f"  Total predictions generated: mean={np.mean(total_preds):.2f}, std={np.std(total_preds):.2f}")
 
     print("\nOREB MODEL")
@@ -365,19 +403,19 @@ def main():
     ridge_oreb_maes = walk_forward_validate(X_oreb, y_oreb, train_negative_binomial, sample_weight=w_oreb)
 
     print("\n  XGBoost (Poisson):")
-    walk_forward_validate(
+    xgb_oreb_maes = walk_forward_validate(
         X_oreb, y_oreb,
         lambda X, y, sample_weight=None: train_xgboost(X, y, objective="count:poisson", sample_weight=sample_weight),
         sample_weight=w_oreb,
     )
 
     print("\n  LightGBM:")
-    walk_forward_validate(X_oreb, y_oreb, train_lightgbm, sample_weight=w_oreb)
+    lgbm_oreb_maes = walk_forward_validate(X_oreb, y_oreb, train_lightgbm, sample_weight=w_oreb)
 
     # Stacked ensemble: NB GLM + XGBoost(Poisson) + LightGBM, per planning doc.
     # NB GLM handles overdispersion in OREB counts better than Ridge as a base.
     print("\n  Training stacked ensemble (final)...")
-    oreb_bases, oreb_meta = train_stacked_ensemble(
+    oreb_bases, oreb_meta, oreb_oof_mae = train_stacked_ensemble(
         X_oreb, y_oreb,
         base_models=[
             ("neg_binomial", train_negative_binomial),
@@ -388,9 +426,29 @@ def main():
         sample_weight=w_oreb,
     )
 
-    oreb_preds = predict_stacked(oreb_bases, oreb_meta, pred_features[OREB_FEATURES])
+    print("  Training final individual models on full data...")
+    final_nb_oreb   = train_negative_binomial(X_oreb, y_oreb, sample_weight=w_oreb)
+    final_xgb_oreb  = train_xgboost(X_oreb, y_oreb, objective="count:poisson", sample_weight=w_oreb)
+    final_lgbm_oreb = train_lightgbm(X_oreb, y_oreb, sample_weight=w_oreb)
+
+    oreb_model_maes = {
+        "NB GLM":        np.mean(ridge_oreb_maes),
+        "XGBoost Pois.": np.mean(xgb_oreb_maes),
+        "LightGBM":      np.mean(lgbm_oreb_maes),
+        "Ensemble":      oreb_oof_mae,
+    }
+    best_oreb = min(oreb_model_maes, key=oreb_model_maes.get)
+    X_pred_oreb = pred_features[OREB_FEATURES]
+    if best_oreb == "NB GLM":
+        oreb_preds = predict_nb(final_nb_oreb, X_pred_oreb)
+    elif best_oreb == "XGBoost Pois.":
+        oreb_preds = final_xgb_oreb.predict(X_pred_oreb)
+    elif best_oreb == "LightGBM":
+        oreb_preds = final_lgbm_oreb.predict(X_pred_oreb)
+    else:
+        oreb_preds = predict_stacked(oreb_bases, oreb_meta, X_pred_oreb)
     oreb_preds = np.maximum(oreb_preds, 0)  # floor at 0 — OREB is a count
-    print(f"  NB GLM CV MAE: {np.mean(ridge_oreb_maes):.3f} | Ensemble OOF MAE shown above")
+    print(f"  Using {best_oreb} for OREB predictions (MAE {oreb_model_maes[best_oreb]:.3f})")
     print(f"  OREB predictions generated: mean={np.mean(oreb_preds):.2f}, std={np.std(oreb_preds):.2f}")
 
     print("\nWRITING PREDICTIONS")
@@ -416,6 +474,35 @@ def main():
         n_null = predictions[col].isna().sum()
         if n_null > 0:
             print(f"    WARNING: {n_null} NaN values in {col}!")
+
+    print("\nMODEL PERFORMANCE SUMMARY")
+    summary = [
+        {
+            "target":   "Spread",
+            "used":     best_spread,
+            "models":   list(spread_model_maes.items()),
+        },
+        {
+            "target":   "Total",
+            "used":     best_total,
+            "models":   list(total_model_maes.items()),
+        },
+        {
+            "target":   "OREB",
+            "used":     best_oreb,
+            "models":   list(oreb_model_maes.items()),
+        },
+    ]
+
+    for entry in summary:
+        mae_lookup = dict(entry["models"])
+        model_str = "  |  ".join(
+            f"{name}: {mae:.3f}{'*' if name == entry['used'] else ''}"
+            for name, mae in entry["models"]
+        )
+        print(f"\n  {entry['target']}")
+        print(f"    {model_str}")
+        print(f"    PREDICTIONS USE: {entry['used']}  (MAE {mae_lookup[entry['used']]:.3f})  (* = selected)")
 
     print("\nDone.")
 
