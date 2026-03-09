@@ -455,9 +455,29 @@ def main():
 
     predictions = pd.read_csv("Predictions.csv")
 
-    predictions["Spread"] = np.round(spread_preds, 1)
-    predictions["Total"] = np.round(total_preds, 1)
-    predictions["OREB"] = np.round(oreb_preds, 1)
+    # Attach predictions to pred_features by position, then merge on date+teams
+    # to avoid row-order mismatches between Predictions.csv and prediction_features.csv.
+    pred_features["_Spread"] = np.round(spread_preds, 1)
+    pred_features["_Total"]  = np.round(total_preds, 1)
+    pred_features["_OREB"]   = np.round(oreb_preds, 1)
+
+    # Normalize join keys: date (YYYY-MM-DD) + home + away
+    pred_features["_date_key"] = pd.to_datetime(pred_features["Date"]).dt.strftime("%Y-%m-%d")
+    pred_features["_home_key"] = pred_features["Home"].str.strip().str.lower()
+    pred_features["_away_key"] = pred_features["Away"].str.strip().str.lower()
+    predictions["_date_key"]   = pd.to_datetime(predictions["Date"]).dt.strftime("%Y-%m-%d")
+    predictions["_home_key"]   = predictions["Home"].str.strip().str.lower()
+    predictions["_away_key"]   = predictions["Away"].str.strip().str.lower()
+
+    merged = predictions.merge(
+        pred_features[["_date_key", "_home_key", "_away_key", "_Spread", "_Total", "_OREB"]],
+        on=["_date_key", "_home_key", "_away_key"],
+        how="left",
+    )
+    predictions["Spread"] = merged["_Spread"].values
+    predictions["Total"]  = merged["_Total"].values
+    predictions["OREB"]   = merged["_OREB"].values
+    predictions.drop(columns=["_date_key", "_home_key", "_away_key"], inplace=True)
 
     predictions.to_csv("Predictions_filled.csv", index=False)
     print(f"  Saved Predictions_filled.csv with {len(predictions)} games")
