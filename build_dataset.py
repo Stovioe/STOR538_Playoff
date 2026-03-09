@@ -18,6 +18,7 @@ Output:
     - data/prediction_features.csv (features for March 14 - April 12 games)
 """
 
+import math
 import os
 import time
 import warnings
@@ -32,12 +33,12 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25", "2025-26"]
 DATA_DIR = "data"
-ROLLING_LONG = 30    # baseline window
-ROLLING_SHORT = 10   # recent form window
-ELO_K = 20
-ELO_HOME_BONUS = 100
+ROLLING_LONG = 40    # baseline window (columns still labeled _30)
+ROLLING_SHORT = 7    # recent form window (columns still labeled _10)
+ELO_K = 16
+ELO_HOME_BONUS = 150
 ELO_INIT = 1500
-ELO_CARRYOVER = 0.75
+ELO_CARRYOVER = 0.5
 API_DELAY = 0.7      # seconds between nba_api calls
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -482,8 +483,10 @@ def compute_elo_ratings(games):
 
         s_home = 1.0 if row["HOME_PTS"] > row["AWAY_PTS"] else 0.0
 
-        elo[h_id] += ELO_K * (s_home - e_home)
-        elo[a_id] += ELO_K * ((1 - s_home) - (1 - e_home))
+        margin = abs(row["HOME_PTS"] - row["AWAY_PTS"])
+        k_mult = min(math.log(margin + 1), 2.5)
+        elo[h_id] += ELO_K * k_mult * (s_home - e_home)
+        elo[a_id] += ELO_K * k_mult * ((1 - s_home) - (1 - e_home))
 
     games["HOME_ELO"] = home_elos
     games["AWAY_ELO"] = away_elos
@@ -742,7 +745,6 @@ SPREAD_FEATURES = [
 
 TOTAL_FEATURES = [
     "EXPECTED_PACE",
-    "PACE_DIFF",
     "SUM_ORTG_30",
     "SUM_DRTG_30",
     "SUM_EFG_30",
@@ -750,14 +752,11 @@ TOTAL_FEATURES = [
     "SUM_PTS_30",
     "SUM_PTS_10",
     "PACE_X_EFG",
-    "SUM_B2B",
-    "ELO_DIFF",
 ]
 
 OREB_FEATURES = [
     "SUM_OREB_RATE_30",
     "OREB_MATCHUP_TOTAL",
-    "OREB_MATCHUP_DIFF",
     "SUM_EXPECTED_MISSES_30",
     "EXPECTED_PACE",
     "SUM_OREB_10",
