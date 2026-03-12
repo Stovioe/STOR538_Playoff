@@ -44,7 +44,11 @@ Plans:
   3. XGBoost n_estimators, max_depth, learning_rate, and subsample are grid-searched per target with overfit prevention; best params applied if MAE improves
   4. LightGBM num_leaves, min_child_samples, and learning_rate are grid-searched per target; best params applied if MAE improves
   5. improvements.md records every grid search result with before/after MAE per target
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [x] 02-01-PLAN.md — Create and run tune_hyperparams.py: Ridge alpha, XGBoost, and LightGBM grid search for all three targets
+- [ ] 02-02-PLAN.md — Apply winning parameters to train_and_predict.py; log all Phase 2 results to improvements.md
 
 ### Phase 3: Feature Refinement
 **Goal**: Each target's feature set contains only features that measurably contribute to lower CV MAE, with any viable new features added
@@ -65,5 +69,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Algorithm Exploration | 2/2 | Complete | 2026-03-12 |
-| 2. Hyperparameter Tuning | 0/? | Not started | - |
+| 2. Hyperparameter Tuning | 1/2 | In progress | - |
 | 3. Feature Refinement | 0/? | Not started | - |

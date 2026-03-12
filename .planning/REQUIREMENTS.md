@@ -14,11 +14,11 @@
 
 ### Hyperparameter Tuning
 
-- [ ] **HPT-01**: GridSearchCV over alpha for current Ridge/Ensemble Spread model (expand range beyond [1–200])
-- [ ] **HPT-02**: GridSearchCV over alpha for current Ridge/Ensemble Total model
-- [ ] **HPT-03**: GridSearchCV over alpha for current Ridge/Ensemble OREB model
-- [ ] **HPT-04**: XGBoost per-target HPT: n_estimators, max_depth, learning_rate, subsample (constrained to prevent overfit)
-- [ ] **HPT-05**: LightGBM per-target HPT: num_leaves, min_child_samples, learning_rate
+- [x] **HPT-01**: GridSearchCV over alpha for current Ridge/Ensemble Spread model (expand range beyond [1–200])
+- [x] **HPT-02**: GridSearchCV over alpha for current Ridge/Ensemble Total model
+- [x] **HPT-03**: GridSearchCV over alpha for current Ridge/Ensemble OREB model
+- [x] **HPT-04**: XGBoost per-target HPT: n_estimators, max_depth, learning_rate, subsample (constrained to prevent overfit)
+- [x] **HPT-05**: LightGBM per-target HPT: num_leaves, min_child_samples, learning_rate
 
 ### Feature Exploration
 
@@ -65,11 +65,11 @@
 | LOG-01 | Phase 1 | Complete (01-01/02) |
 | LOG-02 | Phase 1 | Complete (01-02) |
 | LOG-03 | Phase 1 | Complete (01-01/02) |
-| HPT-01 | Phase 2 | Pending |
-| HPT-02 | Phase 2 | Pending |
-| HPT-03 | Phase 2 | Pending |
-| HPT-04 | Phase 2 | Pending |
-| HPT-05 | Phase 2 | Pending |
+| HPT-01 | Phase 2 | Complete (02-01) |
+| HPT-02 | Phase 2 | Complete (02-01) |
+| HPT-03 | Phase 2 | Complete (02-01) |
+| HPT-04 | Phase 2 | Complete (02-01) |
+| HPT-05 | Phase 2 | Complete (02-01) |
 | FEAT-01 | Phase 3 | Pending |
 | FEAT-02 | Phase 3 | Pending |
 | FEAT-03 | Phase 3 | Pending |
@@ -82,4 +82,4 @@
 
 ---
 *Requirements defined: 2026-03-12*
-*Last updated: 2026-03-12 — ALG-04, LOG-02 marked complete after 01-02 execution; Phase 1 fully closed*
+*Last updated: 2026-03-12 — HPT-01 through HPT-05 marked complete after 02-01 execution; all grid searches run, all NO CHANGE*
