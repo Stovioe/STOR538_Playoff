@@ -17,7 +17,8 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, ElasticNetCV
+from sklearn.svm import SVR
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import StandardScaler
@@ -94,6 +95,59 @@ def train_ridge(X_train, y_train, alpha=1.0, sample_weight=None):
 def predict_ridge(model, X):
     X_scaled = model._scaler.transform(X)
     return model.predict(X_scaled)
+
+
+def train_elasticnet(X_train, y_train, sample_weight=None):
+    """ElasticNet with coordinate-descent path search over l1_ratio and alpha.
+    Phase 1 exploration found this does not beat Ridge for any target, but it
+    is included in the model selection dict so min() can confirm the baseline.
+    Best params found: Spread l1_ratio=0.99/alpha=0.16, Total l1_ratio=0.70/alpha=0.51,
+    OREB l1_ratio=0.10/alpha=0.22.
+    """
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_train)
+    model = ElasticNetCV(
+        l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 0.99],
+        cv=TimeSeriesSplit(n_splits=5),
+        max_iter=5000,
+        random_state=42,
+        n_jobs=-1,
+    )
+    model.fit(X_scaled, y_train, sample_weight=sample_weight)
+    model._scaler = scaler  # required: walk_forward_validate checks hasattr(model, '_scaler')
+    return model
+
+
+def train_svr(X_train, y_train, C=10.0, gamma="scale", epsilon=0.5, sample_weight=None):
+    """SVR with RBF kernel.
+    Phase 1 exploration found this does not beat Ridge for any target.
+    Best params found: Spread C=1/gamma=0.01, Total C=10/gamma=0.01, OREB C=1/gamma=0.01.
+    Note: SVR does not support sample_weight — accepted for API compatibility only.
+    """
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_train)
+    model = SVR(kernel="rbf", C=C, gamma=gamma, epsilon=epsilon)
+    model.fit(X_scaled, y_train)  # SVR does not support sample_weight
+    model._scaler = scaler  # required for predict_ridge() routing
+    return model
+
+
+def train_elasticnet_meta(X_train, y_train, sample_weight=None):
+    """ElasticNet meta-learner for stacked ensemble.
+    Phase 1 exploration found this does not beat Ridge meta for any target.
+    Operates on 3-column OOF base-model prediction matrix.
+    """
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_train)
+    model = ElasticNetCV(
+        l1_ratio=[0.1, 0.5, 0.9, 0.99],
+        cv=TimeSeriesSplit(n_splits=5),
+        max_iter=1000,
+        random_state=42,
+    )
+    model.fit(X_scaled, y_train, sample_weight=sample_weight)
+    model._scaler = scaler
+    return model
 
 
 def train_xgboost(X_train, y_train, objective="reg:squarederror", sample_weight=None, **kwargs):
@@ -183,13 +237,11 @@ def train_stacked_ensemble(X_train, y_train, base_models, meta_model_fn, sample_
     meta_model_fn: function to train the meta-learner on base predictions.
     Uses KFold OOF predictions to build the meta-learner input.
     """
-    from sklearn.model_selection import KFold
-
     n = len(X_train)
     oof_preds = np.zeros((n, len(base_models)))
     fitted_bases = []
 
-    kf = KFold(n_splits=5, shuffle=False)
+    kf = TimeSeriesSplit(n_splits=5)
 
     for i, (name, train_fn) in enumerate(base_models):
         print(f"    Training base model: {name}")
@@ -307,7 +359,7 @@ def main():
     y_spread = train_spread["SPREAD"]
 
     print("\n  Ridge baseline:")
-    ridge_spread_maes = walk_forward_validate(X_spread, y_spread, lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight), sample_weight=w_spread)
+    ridge_spread_maes = walk_forward_validate(X_spread, y_spread, lambda X, y, sample_weight=None: train_ridge(X, y, alpha=100, sample_weight=sample_weight), sample_weight=w_spread)
 
     print("\n  XGBoost:")
     xgb_spread_maes = walk_forward_validate(X_spread, y_spread, train_xgboost, sample_weight=w_spread)
@@ -315,11 +367,24 @@ def main():
     print("\n  LightGBM:")
     lgbm_spread_maes = walk_forward_validate(X_spread, y_spread, train_lightgbm, sample_weight=w_spread)
 
-    print("\n  Training stacked ensemble (final)...")
+    print("\n  ElasticNet (Phase 1 exploration — included for model selection):")
+    elasticnet_spread_maes = walk_forward_validate(
+        X_spread, y_spread, train_elasticnet, sample_weight=w_spread
+    )
+
+    print("\n  SVR (best params from Phase 1: C=1, gamma=0.01):")
+    best_svr_spread_fn = lambda X, y, sample_weight=None, C=1, g=0.01: train_svr(
+        X, y, C=C, gamma=g, epsilon=0.5, sample_weight=sample_weight
+    )
+    svr_spread_maes = walk_forward_validate(
+        X_spread, y_spread, best_svr_spread_fn, sample_weight=w_spread
+    )
+
+    print("\n  Training stacked ensemble (Ridge meta)...")
     spread_bases, spread_meta, spread_oof_mae = train_stacked_ensemble(
         X_spread, y_spread,
         base_models=[
-            ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight)),
+            ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=100, sample_weight=sample_weight)),
             ("xgb", train_xgboost),
             ("lgbm", train_lightgbm),
         ],
@@ -327,25 +392,48 @@ def main():
         sample_weight=w_spread,
     )
 
+    print("\n  Training stacked ensemble (ElasticNet meta — Phase 1 exploration)...")
+    spread_bases_en, spread_meta_en, spread_oof_mae_en = train_stacked_ensemble(
+        X_spread, y_spread,
+        base_models=[
+            ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=100, sample_weight=sample_weight)),
+            ("xgb", train_xgboost),
+            ("lgbm", train_lightgbm),
+        ],
+        meta_model_fn=train_elasticnet_meta,
+        sample_weight=w_spread,
+    )
+
     print("  Training final individual models on full data...")
-    final_ridge_spread = train_ridge(X_spread, y_spread, alpha=1.0, sample_weight=w_spread)
-    final_xgb_spread   = train_xgboost(X_spread, y_spread, sample_weight=w_spread)
-    final_lgbm_spread  = train_lightgbm(X_spread, y_spread, sample_weight=w_spread)
+    final_ridge_spread      = train_ridge(X_spread, y_spread, alpha=100, sample_weight=w_spread)
+    final_xgb_spread        = train_xgboost(X_spread, y_spread, sample_weight=w_spread)
+    final_lgbm_spread       = train_lightgbm(X_spread, y_spread, sample_weight=w_spread)
+    final_elasticnet_spread = train_elasticnet(X_spread, y_spread, sample_weight=w_spread)
+    final_svr_spread        = train_svr(X_spread, y_spread, C=1, gamma=0.01, epsilon=0.5, sample_weight=w_spread)
 
     spread_model_maes = {
-        "Ridge":    np.mean(ridge_spread_maes),
-        "XGBoost":  np.mean(xgb_spread_maes),
-        "LightGBM": np.mean(lgbm_spread_maes),
-        "Ensemble": spread_oof_mae,
+        "Ridge":       np.mean(ridge_spread_maes),
+        "ElasticNet":  np.mean(elasticnet_spread_maes),
+        "SVR":         np.mean(svr_spread_maes),
+        "XGBoost":     np.mean(xgb_spread_maes),
+        "LightGBM":    np.mean(lgbm_spread_maes),
+        "Ensemble":    spread_oof_mae,
+        "Ensemble-EN": spread_oof_mae_en,
     }
     best_spread = min(spread_model_maes, key=spread_model_maes.get)
     X_pred_spread = pred_features[SPREAD_FEATURES]
     if best_spread == "Ridge":
         spread_preds = predict_ridge(final_ridge_spread, X_pred_spread)
+    elif best_spread == "ElasticNet":
+        spread_preds = predict_ridge(final_elasticnet_spread, X_pred_spread)
+    elif best_spread == "SVR":
+        spread_preds = predict_ridge(final_svr_spread, X_pred_spread)
     elif best_spread == "XGBoost":
         spread_preds = final_xgb_spread.predict(X_pred_spread)
     elif best_spread == "LightGBM":
         spread_preds = final_lgbm_spread.predict(X_pred_spread)
+    elif best_spread == "Ensemble-EN":
+        spread_preds = predict_stacked(spread_bases_en, spread_meta_en, X_pred_spread)
     else:
         spread_preds = predict_stacked(spread_bases, spread_meta, X_pred_spread)
     print(f"  Using {best_spread} for Spread predictions (MAE {spread_model_maes[best_spread]:.3f})")
@@ -357,38 +445,81 @@ def main():
     y_total = train_total["TOTAL"]
 
     print("\n  Ridge baseline:")
-    ridge_total_maes = walk_forward_validate(X_total, y_total, lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight), sample_weight=w_total)
+    ridge_total_maes = walk_forward_validate(X_total, y_total, lambda X, y, sample_weight=None: train_ridge(X, y, alpha=200, sample_weight=sample_weight), sample_weight=w_total)
+
+    print("\n  XGBoost:")
+    xgb_total_maes = walk_forward_validate(X_total, y_total, train_xgboost, sample_weight=w_total)
 
     print("\n  LightGBM:")
     lgbm_total_maes = walk_forward_validate(X_total, y_total, train_lightgbm, sample_weight=w_total)
 
-    print("\n  Training stacked ensemble (final)...")
+    print("\n  ElasticNet (Phase 1 exploration — included for model selection):")
+    elasticnet_total_maes = walk_forward_validate(
+        X_total, y_total, train_elasticnet, sample_weight=w_total
+    )
+
+    print("\n  SVR (best params from Phase 1: C=10, gamma=0.01):")
+    best_svr_total_fn = lambda X, y, sample_weight=None, C=10, g=0.01: train_svr(
+        X, y, C=C, gamma=g, epsilon=1.0, sample_weight=sample_weight
+    )
+    svr_total_maes = walk_forward_validate(
+        X_total, y_total, best_svr_total_fn, sample_weight=w_total
+    )
+
+    print("\n  Training stacked ensemble (Ridge meta)...")
     total_bases, total_meta, total_oof_mae = train_stacked_ensemble(
         X_total, y_total,
         base_models=[
-            ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=1.0, sample_weight=sample_weight)),
+            ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=200, sample_weight=sample_weight)),
             ("xgb", train_xgboost),
             ("lgbm", train_lightgbm),
         ],
-        meta_model_fn=lambda X, y, sample_weight=None: train_ridge(X, y, alpha=0.5, sample_weight=sample_weight),
+        meta_model_fn=lambda X, y, sample_weight=None: train_ridge(X, y, alpha=10, sample_weight=sample_weight),
+        sample_weight=w_total,
+    )
+
+    print("\n  Training stacked ensemble (ElasticNet meta — Phase 1 exploration)...")
+    total_bases_en, total_meta_en, total_oof_mae_en = train_stacked_ensemble(
+        X_total, y_total,
+        base_models=[
+            ("ridge", lambda X, y, sample_weight=None: train_ridge(X, y, alpha=200, sample_weight=sample_weight)),
+            ("xgb", train_xgboost),
+            ("lgbm", train_lightgbm),
+        ],
+        meta_model_fn=train_elasticnet_meta,
         sample_weight=w_total,
     )
 
     print("  Training final individual models on full data...")
-    final_ridge_total = train_ridge(X_total, y_total, alpha=1.0, sample_weight=w_total)
-    final_lgbm_total  = train_lightgbm(X_total, y_total, sample_weight=w_total)
+    final_ridge_total      = train_ridge(X_total, y_total, alpha=200, sample_weight=w_total)
+    final_xgb_total        = train_xgboost(X_total, y_total, sample_weight=w_total)
+    final_lgbm_total       = train_lightgbm(X_total, y_total, sample_weight=w_total)
+    final_elasticnet_total = train_elasticnet(X_total, y_total, sample_weight=w_total)
+    final_svr_total        = train_svr(X_total, y_total, C=10, gamma=0.01, epsilon=1.0, sample_weight=w_total)
 
     total_model_maes = {
-        "Ridge":    np.mean(ridge_total_maes),
-        "LightGBM": np.mean(lgbm_total_maes),
-        "Ensemble": total_oof_mae,
+        "Ridge":       np.mean(ridge_total_maes),
+        "ElasticNet":  np.mean(elasticnet_total_maes),
+        "SVR":         np.mean(svr_total_maes),
+        "XGBoost":     np.mean(xgb_total_maes),
+        "LightGBM":    np.mean(lgbm_total_maes),
+        "Ensemble":    total_oof_mae,
+        "Ensemble-EN": total_oof_mae_en,
     }
     best_total = min(total_model_maes, key=total_model_maes.get)
     X_pred_total = pred_features[TOTAL_FEATURES]
     if best_total == "Ridge":
         total_preds = predict_ridge(final_ridge_total, X_pred_total)
+    elif best_total == "ElasticNet":
+        total_preds = predict_ridge(final_elasticnet_total, X_pred_total)
+    elif best_total == "SVR":
+        total_preds = predict_ridge(final_svr_total, X_pred_total)
+    elif best_total == "XGBoost":
+        total_preds = final_xgb_total.predict(X_pred_total)
     elif best_total == "LightGBM":
         total_preds = final_lgbm_total.predict(X_pred_total)
+    elif best_total == "Ensemble-EN":
+        total_preds = predict_stacked(total_bases_en, total_meta_en, X_pred_total)
     else:
         total_preds = predict_stacked(total_bases, total_meta, X_pred_total)
     print(f"  Using {best_total} for Total predictions (MAE {total_model_maes[best_total]:.3f})")
@@ -412,9 +543,22 @@ def main():
     print("\n  LightGBM:")
     lgbm_oreb_maes = walk_forward_validate(X_oreb, y_oreb, train_lightgbm, sample_weight=w_oreb)
 
+    print("\n  ElasticNet (Phase 1 exploration — included for model selection):")
+    elasticnet_oreb_maes = walk_forward_validate(
+        X_oreb, y_oreb, train_elasticnet, sample_weight=w_oreb
+    )
+
+    print("\n  SVR (best params from Phase 1: C=1, gamma=0.01):")
+    best_svr_oreb_fn = lambda X, y, sample_weight=None, C=1, g=0.01: train_svr(
+        X, y, C=C, gamma=g, epsilon=0.1, sample_weight=sample_weight
+    )
+    svr_oreb_maes = walk_forward_validate(
+        X_oreb, y_oreb, best_svr_oreb_fn, sample_weight=w_oreb
+    )
+
     # Stacked ensemble: NB GLM + XGBoost(Poisson) + LightGBM, per planning doc.
     # NB GLM handles overdispersion in OREB counts better than Ridge as a base.
-    print("\n  Training stacked ensemble (final)...")
+    print("\n  Training stacked ensemble (Ridge meta)...")
     oreb_bases, oreb_meta, oreb_oof_mae = train_stacked_ensemble(
         X_oreb, y_oreb,
         base_models=[
@@ -426,25 +570,49 @@ def main():
         sample_weight=w_oreb,
     )
 
+    print("\n  Training stacked ensemble (ElasticNet meta — Phase 1 exploration)...")
+    oreb_bases_en, oreb_meta_en, oreb_oof_mae_en = train_stacked_ensemble(
+        X_oreb, y_oreb,
+        base_models=[
+            ("neg_binomial", train_negative_binomial),
+            ("xgb_poisson", lambda X, y, sample_weight=None: train_xgboost(X, y, objective="count:poisson", sample_weight=sample_weight)),
+            ("lgbm", train_lightgbm),
+        ],
+        meta_model_fn=train_elasticnet_meta,
+        sample_weight=w_oreb,
+    )
+
     print("  Training final individual models on full data...")
-    final_nb_oreb   = train_negative_binomial(X_oreb, y_oreb, sample_weight=w_oreb)
-    final_xgb_oreb  = train_xgboost(X_oreb, y_oreb, objective="count:poisson", sample_weight=w_oreb)
-    final_lgbm_oreb = train_lightgbm(X_oreb, y_oreb, sample_weight=w_oreb)
+    final_nb_oreb        = train_negative_binomial(X_oreb, y_oreb, sample_weight=w_oreb)
+    final_xgb_oreb       = train_xgboost(X_oreb, y_oreb, objective="count:poisson", sample_weight=w_oreb)
+    final_lgbm_oreb      = train_lightgbm(X_oreb, y_oreb, sample_weight=w_oreb)
+    final_elasticnet_oreb = train_elasticnet(X_oreb, y_oreb, sample_weight=w_oreb)
+    final_svr_oreb       = train_svr(X_oreb, y_oreb, C=1, gamma=0.01, epsilon=0.1, sample_weight=w_oreb)
 
     oreb_model_maes = {
         "NB GLM":        np.mean(ridge_oreb_maes),
+        "ElasticNet":    np.mean(elasticnet_oreb_maes),
+        "SVR":           np.mean(svr_oreb_maes),
         "XGBoost Pois.": np.mean(xgb_oreb_maes),
         "LightGBM":      np.mean(lgbm_oreb_maes),
         "Ensemble":      oreb_oof_mae,
+        "Ensemble-EN":   oreb_oof_mae_en,
     }
     best_oreb = min(oreb_model_maes, key=oreb_model_maes.get)
     X_pred_oreb = pred_features[OREB_FEATURES]
     if best_oreb == "NB GLM":
         oreb_preds = predict_nb(final_nb_oreb, X_pred_oreb)
+    elif best_oreb == "ElasticNet":
+        oreb_preds = predict_ridge(final_elasticnet_oreb, X_pred_oreb)
+    elif best_oreb == "SVR":
+        oreb_preds = predict_ridge(final_svr_oreb, X_pred_oreb)
+        oreb_preds = np.maximum(oreb_preds, 0)  # SVR can predict negative; apply floor before general floor
     elif best_oreb == "XGBoost Pois.":
         oreb_preds = final_xgb_oreb.predict(X_pred_oreb)
     elif best_oreb == "LightGBM":
         oreb_preds = final_lgbm_oreb.predict(X_pred_oreb)
+    elif best_oreb == "Ensemble-EN":
+        oreb_preds = predict_stacked(oreb_bases_en, oreb_meta_en, X_pred_oreb)
     else:
         oreb_preds = predict_stacked(oreb_bases, oreb_meta, X_pred_oreb)
     oreb_preds = np.maximum(oreb_preds, 0)  # floor at 0 — OREB is a count
@@ -457,9 +625,9 @@ def main():
 
     # Attach predictions to pred_features by position, then merge on date+teams
     # to avoid row-order mismatches between Predictions.csv and prediction_features.csv.
-    pred_features["_Spread"] = np.round(spread_preds, 1)
-    pred_features["_Total"]  = np.round(total_preds, 1)
-    pred_features["_OREB"]   = np.round(oreb_preds, 1)
+    pred_features["_Spread"] = spread_preds
+    pred_features["_Total"]  = total_preds
+    pred_features["_OREB"]   = oreb_preds
 
     # Normalize join keys: date (YYYY-MM-DD) + home + away
     pred_features["_date_key"] = pd.to_datetime(pred_features["Date"]).dt.strftime("%Y-%m-%d")
