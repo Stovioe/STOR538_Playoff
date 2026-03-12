@@ -10,7 +10,7 @@
 - [x] **ALG-01**: ElasticNet evaluated as replacement/addition for each target independently (l1_ratio and alpha grid-searched)
 - [x] **ALG-02**: SVR (RBF kernel) evaluated per target with kernel width and C tuned via CV
 - [x] **ALG-03**: Per-target stacking evaluated with ElasticNet meta-learner replacing Ridge meta-learner
-- [ ] **ALG-04**: Best algorithm per target identified and applied if it beats baseline CV MAE
+- [x] **ALG-04**: Best algorithm per target identified and applied if it beats baseline CV MAE
 
 ### Hyperparameter Tuning
 
@@ -30,7 +30,7 @@
 ### Results Logging
 
 - [x] **LOG-01**: improvements.md updated with every experiment result (positive or negative) per target
-- [ ] **LOG-02**: Each kept change documented with: what changed, before/after MAE, which targets affected
+- [x] **LOG-02**: Each kept change documented with: what changed, before/after MAE, which targets affected
 - [x] **LOG-03**: Each rejected change documented with: what was tested, result, reason rejected
 
 ## v2 Requirements
@@ -61,10 +61,10 @@
 | ALG-01 | Phase 1 | Complete (01-01) |
 | ALG-02 | Phase 1 | Complete (01-01) |
 | ALG-03 | Phase 1 | Complete (01-01) |
-| ALG-04 | Phase 1 | Pending (01-02) |
-| LOG-01 | Phase 1 | Complete (01-01) |
-| LOG-02 | Phase 1 | Pending (01-02) |
-| LOG-03 | Phase 1 | Complete (01-01) |
+| ALG-04 | Phase 1 | Complete (01-02) |
+| LOG-01 | Phase 1 | Complete (01-01/02) |
+| LOG-02 | Phase 1 | Complete (01-02) |
+| LOG-03 | Phase 1 | Complete (01-01/02) |
 | HPT-01 | Phase 2 | Pending |
 | HPT-02 | Phase 2 | Pending |
 | HPT-03 | Phase 2 | Pending |
@@ -82,4 +82,4 @@
 
 ---
 *Requirements defined: 2026-03-12*
-*Last updated: 2026-03-12 — ALG-01, ALG-02, ALG-03, LOG-01, LOG-03 marked complete after 01-01 execution*
+*Last updated: 2026-03-12 — ALG-04, LOG-02 marked complete after 01-02 execution; Phase 1 fully closed*
