@@ -13,7 +13,7 @@ The existing Spread/Total/OREB prediction models are well-tuned Ridge/Ensemble b
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Algorithm Exploration** - Evaluate ElasticNet, SVR, and stacking alternatives; confirm or replace current model architecture per target
-- [ ] **Phase 2: Hyperparameter Tuning** - Systematic grid search over the confirmed model architecture for each target
+- [x] **Phase 2: Hyperparameter Tuning** - Systematic grid search over the confirmed model architecture for each target
 - [ ] **Phase 3: Feature Refinement** - Prune near-zero-weight features via LASSO path and evaluate new candidate features
 
 ## Phase Details
@@ -48,7 +48,7 @@ Plans:
 
 Plans:
 - [x] 02-01-PLAN.md — Create and run tune_hyperparams.py: Ridge alpha, XGBoost, and LightGBM grid search for all three targets
-- [ ] 02-02-PLAN.md — Apply winning parameters to train_and_predict.py; log all Phase 2 results to improvements.md
+- [x] 02-02-PLAN.md — Apply winning parameters to train_and_predict.py; log all Phase 2 results to improvements.md
 
 ### Phase 3: Feature Refinement
 **Goal**: Each target's feature set contains only features that measurably contribute to lower CV MAE, with any viable new features added
@@ -69,5 +69,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Algorithm Exploration | 2/2 | Complete | 2026-03-12 |
-| 2. Hyperparameter Tuning | 1/2 | In progress | - |
+| 2. Hyperparameter Tuning | 2/2 | Complete | 2026-03-12 |
 | 3. Feature Refinement | 0/? | Not started | - |
